@@ -573,6 +573,106 @@ func EachKey(data []byte, cb func(int, []byte, ValueType, error), paths ...[]str
 	return -1
 }
 
+// Replacer modifies the passed in byte data to replace values if the callback
+// function indicates to do so. The callback currently only supports
+// local keys, not the full hierarchical key path.
+func Replacer(data []byte, replaceValue func(key string) (newVal string, replace bool)) ([]byte, error) {
+	var i, inObj, inArray, lastAppendedEnd int
+	ln := len(data)
+	newBuf := bytes.NewBuffer(make([]byte, 0, ln))
+	for i < ln {
+		switch data[i] {
+		case '"':
+			i++
+			keyBegin := i
+
+			strEnd, keyEscaped := stringEnd(data[i:])
+			if strEnd == -1 {
+				return newBuf.Bytes(), fmt.Errorf("missing string end for " + string(data[i:]))
+			}
+			i += strEnd
+			keyEnd := i - 1
+			valueOffset := nextToken(data[i:])
+			if valueOffset == -1 {
+				return newBuf.Bytes(), fmt.Errorf("premature end of file for string %s", string(data[i:]))
+			}
+			i += valueOffset
+			if data[i] == ':' {
+				key := data[keyBegin:keyEnd]
+
+				// for unescape: if there are no escape sequences, this is cheap; if there are, it is a
+				// bit more expensive, but causes no allocations unless len(key) > unescapeStackBufSize
+				var keyUnesc []byte
+				if !keyEscaped {
+					keyUnesc = key
+				} else {
+					var stackbuf [unescapeStackBufSize]byte
+					if ku, err := Unescape(key, stackbuf[:]); err != nil {
+						return newBuf.Bytes(), err
+					} else {
+						keyUnesc = ku
+					}
+				}
+				i++
+				keyStr := bytesToString(&keyUnesc)
+				newVal, replace := replaceValue(keyStr)
+				if replace {
+					_, _, getOffset, getEndOffset, err := internalGet(data[i:])
+					if err != nil {
+						return newBuf.Bytes(), fmt.Errorf("get value for %q failed: %v", keyStr, err)
+					}
+					newBuf.Write(data[lastAppendedEnd : i+getOffset])
+					newBuf.WriteByte('"')
+					newBuf.WriteString(newVal)
+					newBuf.WriteByte('"')
+					lastAppendedEnd = i + getEndOffset
+					i += getEndOffset
+				}
+				if i < ln {
+					switch data[i] {
+					case '{', '}', '[', '"':
+						i--
+					}
+				}
+			} else {
+				i--
+			}
+		case '{':
+			inObj++
+		case '}':
+			inObj--
+		case '[':
+			inArray++
+			nT := nextToken(data[i:])
+			if nT == -1 {
+				return newBuf.Bytes(), MalformedJsonError
+			}
+			if data[i+nT] == '"' {
+				// no keys in string array, skip it
+				endOffset := blockEnd(data[i:], '[', ']')
+				i += endOffset
+			}
+		case ']':
+			inArray--
+		}
+		i++
+	}
+	if inObj > 0 {
+		return newBuf.Bytes(), fmt.Errorf("too many open braces '{'")
+	}
+	if inObj < 0 {
+		return newBuf.Bytes(), fmt.Errorf("too many close braces '}'")
+	}
+	if inArray > 0 {
+		return newBuf.Bytes(), fmt.Errorf("too many open brackets '['")
+	}
+	if inArray < 0 {
+		return newBuf.Bytes(), fmt.Errorf("too many close brackets ']'")
+	}
+	newBuf.Write(data[lastAppendedEnd:i])
+	return newBuf.Bytes(), nil
+}
+
 // Data types available in valid JSON data.
 type ValueType int
 
