@@ -58,6 +58,13 @@ type DeleteTest struct {
 	data interface{}
 }
 
+type ReplaceTest struct {
+	desc        string
+	replaceKeys map[string]string
+	json        string
+	exp         string
+}
+
 var deleteTests = []DeleteTest{
 	{
 		desc: "Delete test key",
@@ -1145,6 +1152,51 @@ var getArrayTests = []GetTest{
 	},
 }
 
+var getReplaceTests = []ReplaceTest{
+	{
+		desc: `replace basic`,
+		replaceKeys: map[string]string{
+			"key2":  "***",
+			"nkey1": "**",
+		},
+		json: `{"key": "val", "key2":"val2" ,"obj":{ "nkey1": "nval1", "nkey2": "nval2" }}`,
+		exp:  `{"key": "val", "key2":"***" ,"obj":{ "nkey1": "**", "nkey2": "nval2" }}`,
+	},
+	{
+		desc: `replace object`,
+		replaceKeys: map[string]string{
+			"key2": "***",
+			"obj":  "***",
+		},
+		json: `{"key": "val", "key2":"val2" ,"obj":{ "nkey1": "nval1", "nkey2", "nval2" }}`,
+		exp:  `{"key": "val", "key2":"***" ,"obj":"***"}`,
+	},
+	{
+		desc: `replace array`,
+		replaceKeys: map[string]string{
+			"arrKey": "***arr***",
+		},
+		json: `{"key": "val", "arrKey": [ "foo", "bar", {"foo":"bar"} ], "key2": "val2"}`,
+		exp:  `{"key": "val", "arrKey": "***arr***", "key2": "val2"}`,
+	},
+	{
+		desc: `replace complex obj`,
+		replaceKeys: map[string]string{
+			"obj": "***",
+		},
+		json: `{"key": "val","obj":{ "nkey1": "nval1", {"nkey2", "nval2"}, "arr":["foo"]}}`,
+		exp:  `{"key": "val","obj":"***"}`,
+	},
+	{
+		desc: `replace arrayed obj vals`,
+		replaceKeys: map[string]string{
+			"secret": "***",
+		},
+		json: `{"key": "val", "arrKey": [ {"secret":"s1"}, {"secret":"s2"} ]}`,
+		exp:  `{"key": "val", "arrKey": [ {"secret":"***"}, {"secret":"***"} ]}`,
+	},
+}
+
 // checkFoundAndNoError checks the dataType and error return from Get*() against the test case expectations.
 // Returns true the test should proceed to checking the actual data returned from Get*(), or false if the test is finished.
 func getTestCheckFoundAndNoError(t *testing.T, testKind string, test GetTest, jtype ValueType, value interface{}, err error) bool {
@@ -1514,6 +1566,23 @@ func TestArrayEachEmpty(t *testing.T) {
 				t.Errorf("ArrayEach() = %v, want %v", gotOffset, tt.wantOffset)
 			}
 		})
+	}
+}
+
+func TestReplace(t *testing.T) {
+	for _, test := range getReplaceTests {
+		fmt.Println("Running: test Replace: " + test.desc)
+		out, err := Replacer([]byte(test.json), func(key string) (string, bool) {
+			newVal, found := test.replaceKeys[key]
+			return newVal, found
+		})
+		if err != nil {
+			t.Errorf("test Replace %q unexpected error: %v", test.desc, err)
+		} else if string(out) != test.exp {
+			fmt.Printf("exp: %s, len %d\n", test.exp, len(test.exp))
+			fmt.Printf("out: %s, len %d\n", string(out), len(string(out)))
+			t.Errorf("test Replace %q output mismatch, expected %s but was %s", test.desc, test.exp, string(out))
+		}
 	}
 }
 
